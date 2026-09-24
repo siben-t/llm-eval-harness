@@ -13,6 +13,12 @@ bias, self-preference, directional bias with capability-dependent leniency,
 and drift — each with a confidence interval and a source for the definition —
 plus a label-free repair via Dawid–Skene. See *Auditing an LLM judge* below.
 
+Since 2026-09-24 it also evaluates **agent trajectories** (`agent_eval.py`):
+process metrics for tool-using agents, pass@k and pass^k, a length profile
+that separates a real bottleneck from compounding error, and an audit of the
+grader that scored the runs. See *Evaluating agents, and the grader that
+scored them* below.
+
 ## Quickstart
 
 ```bash
@@ -157,6 +163,136 @@ Three things worth knowing before pointing this at a real judge:
 the control is left alone — 21 tests, including a deterministic judge that
 must sit at exactly 0.5 and a pure-primacy judge that must read 1.0.
 
+## Evaluating agents, and the grader that scored them
+
+An agent's score is only as good as the grader that produced it, and published
+audits keep finding graders that don't hold up. TAU-bench counted empty
+responses as successful (Zhu et al., arXiv:2507.02825). BenchJack found 219
+flaws across ten agent benchmarks and reached near-perfect scores without
+solving a single task (arXiv:2605.12673, May 2026). A stricter harness cut one
+frontier model's SWE-bench Pro score from 87.1% to 73.0% (Cursor, June 2026).
+So `agent_eval.py` answers two questions from saved trajectories. It never
+calls a model.
+
+**1. How good is the agent: process, not just outcome.** Every trajectory is
+scored on:
+
+| Metric | What counts |
+|---|---|
+| tool recall / precision | required tools that were called; share of the distinct tools called that the task needed |
+| argument validity | every call checked against the tool schema: required, type, pattern, enum, range, unknown arguments |
+| dependency order | a *successful* call to `a` before the first call to `b`. Booking before the search worked is a violation |
+| forbidden calls | any call to a tool the task forbids. One is enough to fail |
+| similar-tool confusion | a sibling from the same tool family called while the needed tool never was |
+| unrecovered errors | a required tool that failed and never succeeded. A retry that works is fine |
+| loops, redundancy, budget | the same call 3+ times; the same call again after it already worked; more calls than `max_steps` |
+| step efficiency | one successful call per required tool is the work; everything else is overhead |
+
+These follow TRAJECT-Bench (He et al., ICLR 2026), which names similar-tool
+confusion and parameter-blind selection as the dominant tool-use failures.
+
+Reliability is reported as **pass@k and pass^k**, with unbiased estimators
+over n trials per task. pass@k = 1 − C(n−c, k)/C(n, k) asks whether the agent
+succeeds at least once in k tries. pass^k = C(c, k)/C(n, k) asks whether it
+succeeds every time, which is the number a user of a deployed agent feels
+(Anthropic, *Demystifying evals for AI agents*, January 2026).
+
+**2. Can the grader be trusted.** Every trajectory is re-scored by a strict
+reference: every required tool succeeded, in dependency order, nothing
+forbidden was called, and the final answer is non-empty and says what the task
+needs. The grader's verdicts are cross-tabulated against it. Each kind of
+false pass is named and counted: empty answer, missing tool, failed tool,
+order violation, forbidden call, wrong answer, replayed transcript. Together
+the named kinds account for every false pass, and a test enforces that.
+Valid answers the grader rejected are counted too. With a human-labelled
+sample, the grader *and the reference* are both checked against people.
+
+```bash
+python make_agent_data.py      # 4 agents x 12 tasks x 6 trials, planted faults, a buggy grader
+python agent_eval.py --tools data/agent_tools.json --tasks data/agent_tasks.jsonl \
+                     --trajectories data/agent_trajectories.jsonl \
+                     --human-labels data/agent_human_labels.csv \
+                     --k 1 3 --fail-kappa 0.6 --fail-forbidden --json agent_eval.json
+```
+
+The demo plants faults in three agents and leaves `agent_ref` clean as the
+control. The control retries after occasional timeouts, and that must not be
+flagged. `agent_confused` calls deprecated sibling tools and passes malformed
+arguments. `agent_long_fail` loops on a failing call in longer tasks, then
+returns nothing or claims success. `agent_replay` emits one canned transcript
+for every task, forbidden refund included. The grader under audit has three
+planted bugs: empty answers pass; it reads only the final text, never the tool
+calls; and it demands the literal token "Confirmation:". Excerpt:
+
+```
+                      reference            as the grader reports it
+Reliability          pass@1   pass^3          pass@1   pass^3
+  agent_ref           1.000    1.000           0.903    0.758
+  agent_confused      0.167    0.004           0.792    0.554
+  agent_long_fail     0.514    0.417           0.861    0.662
+  agent_replay        0.000    0.000           0.750    0.750    <- never completes a task
+
+Grader audit: agreement 0.497, kappa 0.088, false-pass rate 0.784
+  passed_empty_answer          18   long_fail 18                      <- bug 1
+  passed_missing_tool         106   confused 28, long_fail 30, replay 48
+  passed_failed_tool           64   confused 33, long_fail 31
+  passed_order_violation       22   confused 22
+  passed_forbidden_call        54   replay 54                         <- bug 2
+  passed_replayed_transcript   54   replay 54
+  rejected_valid               14   ref 7, long_fail 6, confused 1    <- bug 3
+
+Length profile       short    mid    drop      q   predicted mid   shortfall        p
+  agent_confused     0.333  0.042   0.292  0.483           0.084       0.042     0.39
+  agent_long_fail    1.000  0.167   0.833  1.000           1.000       0.833   <0.001   <- bottleneck
+
+Human sample (n=60): grader kappa 0.146, reference kappa 0.933
+  2 reference-vs-human disagreements listed for adjudication
+```
+
+With the gates in the command above, the run exits `1`, as it should: the
+grader's kappa is 0.088 against a floor of 0.6, and `agent_replay` calls a
+forbidden tool.
+
+Four things the numbers show:
+
+- **The grader would have shipped the replay agent.** It rates `agent_replay`
+  at 75% pass@1 and a perfectly consistent 0.750 pass^3. The agent never
+  completes a task and issues a forbidden refund on every run. A grader that
+  reads only the final message cannot see what the agent did.
+- **pass^k is the release number.** `agent_long_fail` looks passable at
+  pass@3 = 0.675 and falls to pass^3 = 0.417. `agent_confused` goes from 0.404
+  to 0.004.
+- **A length drop is not automatically a bottleneck.** `agent_confused` loses
+  29 points from short to mid-length tasks, but an agent that gets 48% of steps
+  right predicts that loss (shortfall 0.04, p = 0.39). `agent_long_fail` gets
+  every short-task step right and still collapses (shortfall 0.83). That is the
+  bottleneck, and it is the only one flagged.
+- **The reference is checked too.** It agrees with the human sample on 58 of
+  60. Both disagreements are printed with the reference's reasons so a person
+  can adjudicate them; they are not silently resolved in either direction.
+  They are the two planted reviewer slips.
+
+Limits, stated plainly:
+
+- The reference needs a task spec: required tools, order, forbidden tools,
+  expected content. Writing that spec is the real work of an agent eval. For
+  open-ended tasks, grade with a rubric judge and audit the judge with
+  `judge_audit.py`.
+- Argument checks are schema-level. A well-formed date that is the wrong date
+  passes; semantic checks belong in the task spec.
+- Loop detection is exact-match. An agent that legitimately polls a status
+  endpoint needs a higher `--loop-threshold`.
+- Replay detection compares whole transcripts across tasks, so genuinely
+  duplicate tasks will trip it. De-duplicate the task set first (`rl-env-qa`
+  does that).
+
+Exit codes match the rest of the harness: `0` all gates pass, `1` a gate
+fails, `2` bad input. `tests/test_agent_eval.py` has 43 tests. They check the
+estimators by hand (n = 5, c = 2, k = 2 gives pass@2 = 0.7 and pass^2 = 0.1)
+and every argument rule. They also check that every planted fault and grader
+bug is recovered exactly, with no misses and no false alarms, and that the
+control is left alone.
+
 ## What the demo shows
 
 Two simulated model runs over 24 tasks in six categories. The weaker
@@ -185,8 +321,11 @@ with word-boundary matching is the first item under Extending.)
 | `demo.py` | end-to-end run |
 | `judge_audit.py` | position bias, self-preference, directional bias, drift, Dawid–Skene — library and CLI |
 | `make_judge_data.py` | synthetic judge verdicts with planted, recoverable biases |
+| `agent_eval.py` | agent trajectory metrics, pass@k / pass^k, length profile, grader audit — library and CLI |
+| `make_agent_data.py` | synthetic agent trajectories with planted faults, graded by a planted-buggy grader |
 | `tests/test_checks.py` | hand-computable cases for every check |
 | `tests/test_judge_audit.py` | every planted bias is recovered; the control is left alone |
+| `tests/test_agent_eval.py` | every planted agent fault and grader bug is recovered exactly; the control is left alone |
 
 ## Data formats
 
@@ -206,6 +345,29 @@ are excluded from that task's weighted overall score.
 `data/human_labels.csv` — the audited subset: `task_id, dimension,
 human_score`.
 
+Agent evaluation (`agent_eval.py`):
+
+```jsonc
+// data/agent_tools.json: one schema per tool; "family" groups siblings that get confused
+{"book_flight": {"family": "flights", "args": {
+    "flight_id": {"type": "str", "required": true, "pattern": "^FL\\d{4}$"},
+    "passengers": {"type": "int", "required": true, "min": 1, "max": 9}}}}
+
+// data/agent_tasks.jsonl: one task per line
+{"task_id": "flight_01", "required_tools": ["search_flights", "book_flight"],
+ "required_order": [["search_flights", "book_flight"]], "forbidden_tools": ["refund_payment"],
+ "optional_tools": ["get_weather"], "max_steps": 6, "expected_final_contains": "confirmation"}
+
+// data/agent_trajectories.jsonl: one run per line; graded_success is the grader under audit
+{"agent": "agent_ref", "task_id": "flight_01", "trial": 1, "graded_success": true, "steps": [
+  {"type": "tool_call", "tool": "search_flights", "args": {"origin": "IAD", "destination": "SFO", "date": "2026-10-14"}},
+  {"type": "tool_result", "tool": "search_flights", "ok": true},
+  {"type": "final", "content": "Done. Confirmation: CX12345."}]}
+```
+
+`data/agent_human_labels.csv` — optional sample: `agent, task_id, trial,
+human_success`.
+
 ## Extending
 
 - word-boundary matching for `must_exclude` (fixes the documented
@@ -215,6 +377,10 @@ human_score`.
 - bootstrap confidence intervals on the head-to-head win rate
 - regression gating: fail CI when a dimension mean drops vs baseline
 - per-category score thresholds for release decisions
+- agent eval: a grader hook that runs null agents (empty, do-nothing, replayed)
+  through a live grader before its scores are trusted
+- agent eval: semantic argument checks from the task spec (the right date,
+  not just a well-formed one)
 
 ## License
 

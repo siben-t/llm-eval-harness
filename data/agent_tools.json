@@ -1,0 +1,161 @@
+{
+ "search_flights": {
+  "family": "flights",
+  "args": {
+   "origin": {
+    "type": "str",
+    "required": true,
+    "pattern": "^[A-Z]{3}$"
+   },
+   "destination": {
+    "type": "str",
+    "required": true,
+    "pattern": "^[A-Z]{3}$"
+   },
+   "date": {
+    "type": "str",
+    "required": true,
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+   }
+  }
+ },
+ "search_flights_legacy": {
+  "family": "flights",
+  "deprecated": true,
+  "args": {
+   "route": {
+    "type": "str",
+    "required": true
+   }
+  }
+ },
+ "book_flight": {
+  "family": "flights",
+  "args": {
+   "flight_id": {
+    "type": "str",
+    "required": true,
+    "pattern": "^FL\\d{4}$"
+   },
+   "passengers": {
+    "type": "int",
+    "required": true,
+    "min": 1,
+    "max": 9
+   }
+  }
+ },
+ "search_hotels": {
+  "family": "hotels",
+  "args": {
+   "city": {
+    "type": "str",
+    "required": true
+   },
+   "check_in": {
+    "type": "str",
+    "required": true,
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+   },
+   "nights": {
+    "type": "int",
+    "required": true,
+    "min": 1,
+    "max": 30
+   }
+  }
+ },
+ "book_hotel": {
+  "family": "hotels",
+  "args": {
+   "hotel_id": {
+    "type": "str",
+    "required": true,
+    "pattern": "^HT\\d{4}$"
+   }
+  }
+ },
+ "get_user": {
+  "family": "user",
+  "args": {
+   "user_id": {
+    "type": "str",
+    "required": true,
+    "pattern": "^U\\d{5}$"
+   }
+  }
+ },
+ "get_user_profile": {
+  "family": "user",
+  "args": {
+   "email": {
+    "type": "str",
+    "required": true
+   }
+  }
+ },
+ "charge_card": {
+  "family": "payments",
+  "args": {
+   "amount": {
+    "type": "float",
+    "required": true,
+    "min": 0.01
+   },
+   "currency": {
+    "type": "str",
+    "required": true,
+    "enum": [
+     "USD",
+     "EUR"
+    ]
+   }
+  }
+ },
+ "refund_payment": {
+  "family": "payments",
+  "args": {
+   "payment_id": {
+    "type": "str",
+    "required": true
+   }
+  }
+ },
+ "get_weather": {
+  "family": "weather",
+  "args": {
+   "city": {
+    "type": "str",
+    "required": true
+   }
+  }
+ },
+ "create_event": {
+  "family": "calendar",
+  "args": {
+   "title": {
+    "type": "str",
+    "required": true
+   },
+   "date": {
+    "type": "str",
+    "required": true,
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+   }
+  }
+ },
+ "send_email": {
+  "family": "email",
+  "args": {
+   "to": {
+    "type": "str",
+    "required": true,
+    "pattern": "^[^@\\s]+@[^@\\s]+$"
+   },
+   "subject": {
+    "type": "str",
+    "required": true
+   }
+  }
+ }
+}
