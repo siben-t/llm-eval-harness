@@ -1,0 +1,293 @@
+{
+  "position_bias": {
+    "judge_alpha": {
+      "n_pairs": 600,
+      "first_pick_rate": 0.6608333333333334,
+      "first_pick_ci_low": 0.633571828302476,
+      "first_pick_ci_high": 0.6870683998208365,
+      "position_bias": 0.16083333333333338,
+      "flip_rate": 0.4083333333333333,
+      "flip_ci_low": 0.36970795208030727,
+      "flip_ci_high": 0.4481250264571536,
+      "primacy_share_of_flips": 0.8938775510204081
+    },
+    "judge_beta": {
+      "n_pairs": 600,
+      "first_pick_rate": 0.5083333333333333,
+      "first_pick_ci_low": 0.4800661808828322,
+      "first_pick_ci_high": 0.5365473024396192,
+      "position_bias": 0.008333333333333304,
+      "flip_rate": 0.33666666666666667,
+      "flip_ci_low": 0.29999912821859975,
+      "flip_ci_high": 0.3754123608117851,
+      "primacy_share_of_flips": 0.5247524752475248
+    },
+    "judge_gamma": {
+      "n_pairs": 600,
+      "first_pick_rate": 0.415,
+      "first_pick_ci_low": 0.3874365668885033,
+      "first_pick_ci_high": 0.44310590322249227,
+      "position_bias": -0.08500000000000002,
+      "flip_rate": 0.3466666666666667,
+      "flip_ci_low": 0.3096710050493871,
+      "flip_ci_high": 0.3856132499587293,
+      "primacy_share_of_flips": 0.2548076923076923
+    }
+  },
+  "self_preference": {
+    "judge_alpha": {
+      "own_model": "model_alpha",
+      "n_own_pairs": 93,
+      "n_null_pairs": 100,
+      "PIR": 0.4731182795698925,
+      "null_PIR": 0.185,
+      "beta": 0.2881182795698925,
+      "beta_ci_low": 0.1720779569892473,
+      "beta_ci_high": 0.4056639784946236
+    },
+    "judge_beta": {
+      "own_model": "model_beta",
+      "n_own_pairs": 100,
+      "n_null_pairs": 93,
+      "PIR": 0.2,
+      "null_PIR": 0.1989247311827957,
+      "beta": 0.0010752688172043223,
+      "beta_ci_low": -0.0843198924731183,
+      "beta_ci_high": 0.0979758064516128
+    },
+    "judge_gamma": {
+      "own_model": "model_gamma",
+      "n_own_pairs": 89,
+      "n_null_pairs": 104,
+      "PIR": 0.23595505617977527,
+      "null_PIR": 0.22596153846153846,
+      "beta": 0.00999351771823681,
+      "beta_ci_low": -0.08954867113223855,
+      "beta_ci_high": 0.1111549265341398
+    }
+  },
+  "label_free_rates": {
+    "judge_alpha": {
+      "FPR_est": 0.25214648806188433,
+      "FNR_est": 0.0603525964936759
+    },
+    "judge_beta": {
+      "FPR_est": 0.11281925732059978,
+      "FNR_est": 0.08730499734077501
+    },
+    "judge_gamma": {
+      "FPR_est": 0.15309471158927648,
+      "FNR_est": 0.10792172588605792
+    }
+  },
+  "directional_bias": {
+    "judge_alpha": {
+      "n": 1600,
+      "fp": 141,
+      "tn": 400,
+      "fn": 69,
+      "tp": 990,
+      "FPR": 0.26062846580406657,
+      "FNR": 0.06515580736543909,
+      "directional_bias": 0.1954726584386275,
+      "FPR_ci_low": 0.2254175630529826,
+      "FPR_ci_high": 0.29921479416191127,
+      "FNR_ci_low": 0.05180699334049885,
+      "FNR_ci_high": 0.08164796148464748
+    },
+    "judge_beta": {
+      "n": 1600,
+      "fp": 62,
+      "tn": 479,
+      "fn": 94,
+      "tp": 965,
+      "FPR": 0.11460258780036968,
+      "FNR": 0.08876298394711993,
+      "directional_bias": 0.02583960385324975,
+      "FPR_ci_low": 0.09043493550273501,
+      "FPR_ci_high": 0.14420480565020224,
+      "FNR_ci_low": 0.07308684038656792,
+      "FNR_ci_high": 0.10741181938835333
+    },
+    "judge_gamma": {
+      "n": 1600,
+      "fp": 82,
+      "tn": 459,
+      "fn": 114,
+      "tp": 945,
+      "FPR": 0.15157116451016636,
+      "FNR": 0.10764872521246459,
+      "directional_bias": 0.043922439297701774,
+      "FPR_ci_low": 0.12381648386863567,
+      "FPR_ci_high": 0.1842391094518855,
+      "FNR_ci_low": 0.09037978016377543,
+      "FNR_ci_high": 0.12775384357096572
+    }
+  },
+  "capability_leniency": {
+    "judge_alpha": {
+      "r_accuracy_vs_FPR": 0.8748827807554513,
+      "FPR_strongest": 0.373134328358209,
+      "FPR_weakest": 0.24,
+      "strong_minus_weak": 0.133134328358209,
+      "gap_p_value": 0.034336469507911804,
+      "FPR_by_examinee": {
+        "model_alpha": 0.3731,
+        "model_beta": 0.2773,
+        "model_delta": 0.24,
+        "model_gamma": 0.2258
+      }
+    },
+    "judge_beta": {
+      "r_accuracy_vs_FPR": 0.9259046462172746,
+      "FPR_strongest": 0.208955223880597,
+      "FPR_weakest": 0.06,
+      "strong_minus_weak": 0.148955223880597,
+      "gap_p_value": 0.00037179842101831007,
+      "FPR_by_examinee": {
+        "model_alpha": 0.209,
+        "model_beta": 0.1261,
+        "model_delta": 0.06,
+        "model_gamma": 0.1355
+      }
+    },
+    "judge_gamma": {
+      "r_accuracy_vs_FPR": 0.9377187224405168,
+      "FPR_strongest": 0.22388059701492538,
+      "FPR_weakest": 0.125,
+      "strong_minus_weak": 0.09888059701492538,
+      "gap_p_value": 0.04966934626522779,
+      "FPR_by_examinee": {
+        "model_alpha": 0.2239,
+        "model_beta": 0.1933,
+        "model_delta": 0.125,
+        "model_gamma": 0.1226
+      }
+    },
+    "ALL": {
+      "r_accuracy_vs_FPR": 0.964188652262549,
+      "FPR_strongest": 0.26865671641791045,
+      "FPR_weakest": 0.14166666666666666,
+      "strong_minus_weak": 0.12699004975124378,
+      "gap_p_value": 3.87921666344937e-05,
+      "FPR_by_examinee": {
+        "model_alpha": 0.2687,
+        "model_beta": 0.1989,
+        "model_delta": 0.1417,
+        "model_gamma": 0.1613
+      }
+    }
+  },
+  "drift": {
+    "judge_alpha": {
+      "FPR_by_batch": {
+        "1": 0.0952,
+        "2": 0.1524,
+        "3": 0.4128,
+        "4": 0.3451,
+        "5": 0.2844
+      },
+      "FNR_by_batch": {
+        "1": 0.0744,
+        "2": 0.0744,
+        "3": 0.0806,
+        "4": 0.0386,
+        "5": 0.0569
+      },
+      "FPR_first": 0.09523809523809523,
+      "FPR_last": 0.28440366972477066,
+      "FPR_change": 0.18916557448667543,
+      "FPR_p_value": 0.00043953183259293205,
+      "FNR_change": -0.01754656673647085,
+      "FNR_p_value": 0.46496472771477215
+    },
+    "judge_beta": {
+      "FPR_by_batch": {
+        "1": 0.1143,
+        "2": 0.0762,
+        "3": 0.1101,
+        "4": 0.1327,
+        "5": 0.1376
+      },
+      "FNR_by_batch": {
+        "1": 0.093,
+        "2": 0.0744,
+        "3": 0.0853,
+        "4": 0.0918,
+        "5": 0.0995
+      },
+      "FPR_first": 0.11428571428571428,
+      "FPR_last": 0.13761467889908258,
+      "FPR_change": 0.023328964613368294,
+      "FPR_p_value": 0.6073806898072602,
+      "FNR_change": 0.006502810536757414,
+      "FNR_p_value": 0.8200094454563156
+    },
+    "judge_gamma": {
+      "FPR_by_batch": {
+        "1": 0.1238,
+        "2": 0.0952,
+        "3": 0.2018,
+        "4": 0.1504,
+        "5": 0.1835
+      },
+      "FNR_by_batch": {
+        "1": 0.107,
+        "2": 0.1209,
+        "3": 0.128,
+        "4": 0.0676,
+        "5": 0.1137
+      },
+      "FPR_first": 0.12380952380952381,
+      "FPR_last": 0.1834862385321101,
+      "FPR_change": 0.05967671472258629,
+      "FPR_p_value": 0.22687983498130881,
+      "FNR_change": 0.006767331643337371,
+      "FNR_p_value": 0.8236116925930048
+    }
+  },
+  "label_free_vs_truth": {
+    "judge_alpha": {
+      "FPR": 0.26062846580406657,
+      "FNR": 0.06515580736543909,
+      "FPR_est": 0.25214648806188433,
+      "FNR_est": 0.0603525964936759,
+      "FPR_abs_err": 0.008481977742182234,
+      "FNR_abs_err": 0.004803210871763192
+    },
+    "judge_beta": {
+      "FPR": 0.11460258780036968,
+      "FNR": 0.08876298394711993,
+      "FPR_est": 0.11281925732059978,
+      "FNR_est": 0.08730499734077501,
+      "FPR_abs_err": 0.001783330479769904,
+      "FNR_abs_err": 0.0014579866063449132
+    },
+    "judge_gamma": {
+      "FPR": 0.15157116451016636,
+      "FNR": 0.10764872521246459,
+      "FPR_est": 0.15309471158927648,
+      "FNR_est": 0.10792172588605792,
+      "FPR_abs_err": 0.0015235470791101213,
+      "FNR_abs_err": 0.00027300067359332936
+    }
+  },
+  "ensemble": {
+    "majority_vote": 0.956875,
+    "dawid_skene_vote": 0.956875,
+    "best_single_judge": 0.9025,
+    "per_judge": {
+      "judge_alpha": 0.86875,
+      "judge_beta": 0.9025,
+      "judge_gamma": 0.8775
+    }
+  },
+  "gates": {
+    "failures": [
+      "judge_alpha: position bias +0.161 exceeds 0.1",
+      "judge_alpha: beta 0.288 > 0.15",
+      "judge_alpha: FPR drifted +0.189 (p=0.0004)"
+    ],
+    "passed": false
+  }
+}
