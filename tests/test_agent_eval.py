@@ -20,9 +20,10 @@ sys.path.insert(0, ROOT)
 import make_agent_data as gen                                  # noqa: E402
 from agent_eval import (                                       # noqa: E402
     EXIT_BAD_INPUT, EXIT_FAIL, EXIT_OK, GRADER_CHECKS,
-    cohen_kappa, fit_step_reliability, grader_audit, human_agreement,
-    length_profile, load_human_labels, main, pass_at_k, pass_hat_k,
-    poisson_binomial_cdf, reliability, score_all, score_trajectory,
+    build_probes, cohen_kappa, example_args, fit_step_reliability,
+    grader_audit, human_agreement, length_profile, load_human_labels, main,
+    pass_at_k, pass_hat_k, poisson_binomial_cdf, probe_graders,
+    reference_reasons, reliability, score_all, score_trajectory,
     validate_args, validate_tasks, validate_trajectories,
 )
 
@@ -220,6 +221,10 @@ def test_task_and_trajectory_schema_errors_are_caught(tasks):
     with pytest.raises(ValueError, match="required_order"):
         validate_tasks([{"task_id": "x", "required_tools": ["get_user"],
                          "required_order": [["get_user", "book_flight"]]}], gen.TOOLS)
+    with pytest.raises(ValueError, match="cycle"):
+        validate_tasks([{"task_id": "x", "required_tools": ["get_user", "create_event"],
+                         "required_order": [["get_user", "create_event"], ["create_event", "get_user"]]}],
+                       gen.TOOLS)
     one = {"agent": "a", "task_id": "weather_01", "trial": 1, "steps": answer("forecast")}
     with pytest.raises(ValueError, match="every trajectory or on none"):
         validate_trajectories([dict(one, graded_success=True), dict(one, trial=2)], tasks)
@@ -338,6 +343,88 @@ def test_human_review_surfaces_exactly_the_two_slips(scored, generated):
     assert out["grader"]["kappa"] < out["reference"]["kappa"]
 
 
+# ---------------------------------------------------------------- null-agent probes
+
+TOOL_PROBES = {"no_tools", "missing_tool", "failed_tool", "forbidden_call", "wrong_order", "other_task"}
+
+
+def probe(graders, tasks, generated):
+    rows, _ = generated
+    return probe_graders(graders, tasks, gen.TOOLS, rows)
+
+
+def test_each_probe_has_exactly_one_defect_and_the_control_has_none(tasks, generated):
+    rows, _ = generated
+    examples = example_args(gen.TOOLS, rows)
+    kinds = set()
+    for tid, task in tasks.items():
+        probes = build_probes(task, tasks, examples)
+        control = score_trajectory(task, gen.TOOLS, probes.pop("control"))
+        assert control["reference_success"] and control["arg_validity"] == 1.0, tid
+        for kind, steps in probes.items():
+            m = score_trajectory(task, gen.TOOLS, steps)
+            assert not m["reference_success"], (tid, kind)
+            assert len(reference_reasons(m)) == 1 and m["arg_validity"] == 1.0, (tid, kind)
+            kinds.add(kind)
+    assert kinds == TOOL_PROBES | {"empty_answer", "wrong_answer"}
+
+
+def test_probes_find_exactly_the_bugs_each_grader_still_has(tasks, generated):
+    out = probe({"buggy": gen.buggy_grader, "patched": gen.patched_grader,
+                 "fixed": gen.fixed_grader}, tasks, generated)
+    assert out["tasks_probed"] == len(gen.TASKS) and out["tasks_skipped"] == []
+    leaks = {name: {k for k, v in g["probes"].items() if v["passed"]}
+             for name, g in out["graders"].items()}
+    assert leaks["buggy"] == TOOL_PROBES | {"empty_answer"}      # bugs 1 and 2
+    assert leaks["patched"] == TOOL_PROBES                       # bug 2 only
+    assert leaks["fixed"] == set()
+    for g in out["graders"].values():
+        assert g["control"]["passed"] == g["control"]["n"] == len(gen.TASKS)
+        assert g["errors"] == []
+    assert out["graders"]["buggy"]["probes"]["empty_answer"]["rate"] == 1.0   # on every task
+    assert [n for n, g in out["graders"].items() if g["holds"]] == ["fixed"]
+
+
+def test_a_grader_that_fails_everything_does_not_hold(tasks, generated):
+    out = probe({"never": lambda task, steps: False, "score": lambda task, steps: 0.9},
+                tasks, generated)
+    never, score = out["graders"]["never"], out["graders"]["score"]
+    assert all(v["passed"] == 0 for v in never["probes"].values())
+    assert never["control"]["passed"] == 0 and not never["holds"]      # it rejects valid work
+    assert score["control"]["rate"] == 1.0                             # a score >= 0.5 is a pass
+    assert score["probes"]["empty_answer"]["rate"] == 1.0 and not score["holds"]
+
+
+def test_a_grader_that_crashes_is_reported_not_fatal(tasks, generated):
+    def fragile(task, steps):
+        return steps[-1]["content"][0] != "x"          # IndexError on an empty answer
+    g = probe({"fragile": fragile}, tasks, generated)["graders"]["fragile"]
+    assert not g["holds"] and len(g["errors"]) == len(gen.TASKS)
+    assert g["errors"][0].endswith("IndexError: string index out of range")
+
+
+def test_probe_arguments_come_from_the_schema_first_then_real_calls():
+    tools = json.loads(json.dumps(gen.TOOLS))
+    tools["get_user"]["example_args"] = {"user_id": "U00001"}
+    tools["get_weather"]["example_args"] = {"city": 5}                 # invalid, so ignored
+    rows = [{"steps": call("get_weather", {"city": "Chicago"})
+             + call("book_flight", {"flight_id": "bad", "passengers": 1})
+             + call("book_hotel", {"hotel_id": "HT1234"}, ok=False)}]
+    ex = example_args(tools, rows)
+    assert ex["get_user"] == {"user_id": "U00001"}
+    assert ex["get_weather"] == {"city": "Chicago"}
+    assert "book_flight" not in ex and "book_hotel" not in ex          # invalid args; failed call
+    task = validate_tasks([{"task_id": "x", "required_tools": ["book_hotel"]}], tools)["x"]
+    assert build_probes(task, {"x": task}, ex) is None                  # skipped, never guessed
+
+
+def test_the_fixed_grader_agrees_with_the_reference_on_every_trajectory(scored, generated):
+    rows, _ = generated
+    by_id = {t["task_id"]: t for t in gen.TASKS}
+    verdicts = [gen.fixed_grader(by_id[r["task_id"]], r["steps"]) for r in rows]
+    assert verdicts == scored["reference_success"].tolist()
+
+
 # ---------------------------------------------------------------- CLI
 
 def test_cli_writes_the_full_report(tmp_path):
@@ -377,6 +464,18 @@ def test_cli_bad_input_is_exit_2(tmp_path):
     orphan = tmp_path / "orphan.csv"
     orphan.write_text("agent,task_id,trial,human_success\nagent_ref,weather_01,99,1\n")
     assert main(ARGS + ["--quiet", "--human-labels", str(orphan)]) == EXIT_BAD_INPUT
+
+
+def test_cli_probe_gate(tmp_path):
+    probe_args = ARGS + ["--quiet", "--fail-probes"]
+    assert main(probe_args + ["--grader", "make_agent_data:buggy_grader"]) == EXIT_FAIL
+    assert main(probe_args + ["--grader", "make_agent_data:fixed_grader"]) == EXIT_OK
+    for bad in ("make_agent_data:no_such_grader", "no_such_module:grade", "missing_colon"):
+        assert main(probe_args + ["--grader", bad]) == EXIT_BAD_INPUT
+    out = tmp_path / "probes.json"
+    assert main(ARGS + ["--quiet", "--json", str(out), "--grader", "make_agent_data:patched_grader"]) == EXIT_OK
+    patched = json.loads(out.read_text())["grader_probes"]["graders"]["patched_grader"]
+    assert patched["holds"] is False and patched["probes"]["empty_answer"]["passed"] == 0
 
 
 def test_cli_exit_code_from_a_real_process():

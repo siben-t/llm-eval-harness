@@ -27,6 +27,14 @@ questions from trajectories you already have:
      reference-vs-human disagreement is listed for adjudication instead of
      being silently resolved.
 
+And before any agent runs: null-agent probes. Given the grader as a Python
+callable, it is fed transcripts that must fail, each with exactly one defect
+(an empty answer, no tool calls, a missing tool, a failed tool, a forbidden
+call, steps out of order, a wrong answer, another task's transcript), next to
+a valid control it must pass. A trivial agent that returns empty responses
+scored 38% on TAU-bench airline tasks, per the paper below. This is the check
+that catches that before a leaderboard does.
+
 Plus a length profile. Success falls as tasks get longer, and much of that
 is plain compounding: an agent that gets each step right with probability q
 finishes an L-step task with probability about q^L. The profile fits q on
@@ -58,16 +66,20 @@ Inputs
                                 {"type": "tool_result", "tool": ..., "ok": bool}
                                 {"type": "final", "content": "..."}
   --human-labels  CSV    agent, task_id, trial, human_success (0|1), optional
+  --grader        MODULE:FUNCTION, repeatable: grade(task, steps) -> bool or a
+                         score (>= 0.5 passes), probed with null-agent transcripts
 
 CLI
   python agent_eval.py --tools data/agent_tools.json --tasks data/agent_tasks.jsonl
                        --trajectories data/agent_trajectories.jsonl
                        --human-labels data/agent_human_labels.csv --k 1 3
                        --json agent_eval.json --fail-kappa 0.6 --fail-forbidden
+  python agent_eval.py ... --grader make_agent_data:buggy_grader --fail-probes
 Exit 0 if every gate passes; 1 if one fails; 2 on bad input.
 """
 
 import argparse
+import importlib
 import json
 import math
 import os
@@ -171,8 +183,25 @@ def validate_tasks(rows: list, tools: dict) -> dict:
         clash = set(task["required_tools"]) & set(task["forbidden_tools"])
         if clash:
             raise ValueError(f"task {tid}: required AND forbidden: {sorted(clash)}")
+        execution_order(task)                   # raises on a cycle: the task is impossible
         tasks[tid] = task
     return tasks
+
+
+def execution_order(task: dict) -> list:
+    """The required tools in an order that satisfies required_order (a stable
+    topological sort). A cycle means no agent can ever pass: bad input."""
+    preds = {t: set() for t in task["required_tools"]}
+    for a, b in task.get("required_order", []):
+        preds[b].add(a)
+    order, remaining = [], list(task["required_tools"])
+    while remaining:
+        nxt = next((t for t in remaining if preds[t] <= set(order)), None)
+        if nxt is None:
+            raise ValueError(f"task {task['task_id']}: required_order has a cycle")
+        order.append(nxt)
+        remaining.remove(nxt)
+    return order
 
 
 def validate_trajectories(rows: list, tasks: dict) -> bool:
@@ -663,6 +692,149 @@ def human_agreement(df: pd.DataFrame, labels: pd.DataFrame) -> dict:
 
 
 # --------------------------------------------------------------------------
+# null-agent probes: test the grader before any agent runs
+# --------------------------------------------------------------------------
+
+PROBES = ("empty_answer", "no_tools", "missing_tool", "failed_tool", "forbidden_call",
+          "wrong_order", "wrong_answer", "other_task")
+PASS_SCORE = 0.5
+
+
+def example_args(tools: dict, rows: list) -> dict:
+    """Arguments to put in probe transcripts, one set per tool: the schema's own
+    "example_args" when present and valid, otherwise the first call a real
+    trajectory sent that succeeded and passes the schema. Reusing real arguments
+    keeps each probe's defect the only defect in it."""
+    examples = {}
+    for name, spec in tools.items():
+        ex = spec.get("example_args")
+        if isinstance(ex, dict) and not validate_args(name, ex, tools):
+            examples[name] = ex
+    for r in rows:
+        for c in tool_calls(r["steps"]):
+            if (c["ok"] and c["tool"] in tools and c["tool"] not in examples
+                    and not validate_args(c["tool"], c["args"], tools)):
+                examples[c["tool"]] = c["args"]
+    return examples
+
+
+def _transcript(calls: list, final: str) -> list:
+    steps = []
+    for tool, args, ok in calls:
+        steps.append({"type": "tool_call", "tool": tool, "args": dict(args)})
+        steps.append({"type": "tool_result", "tool": tool, "ok": ok})
+    steps.append({"type": "final", "content": final})
+    return steps
+
+
+def build_probes(task: dict, tasks: dict, examples: dict):
+    """{"control": a valid transcript the grader must pass, probe: a transcript it
+    must fail}. Each probe differs from the control by one defect. None when the
+    task cannot be probed because a required tool has no usable arguments."""
+    order = execution_order(task)
+    if any(t not in examples for t in order):
+        return None
+    want = task.get("expected_final_contains")
+    claim = (f"Done. {want[:1].upper()}{want[1:]}: completed as requested." if want
+             else "Done. Completed as requested.")
+    good = [(t, examples[t], True) for t in order]
+    probes = {"control": _transcript(good, claim), "empty_answer": _transcript(good, "")}
+    if order:
+        probes["no_tools"] = _transcript([], claim)
+        # the last tool in execution order is nobody's prerequisite, so dropping or
+        # failing it adds no order violation on top
+        probes["failed_tool"] = _transcript(good[:-1] + [(order[-1], examples[order[-1]], False)], claim)
+    if len(order) >= 2:
+        probes["missing_tool"] = _transcript(good[:-1], claim)
+    if task.get("forbidden_tools"):
+        f = task["forbidden_tools"][0]
+        probes["forbidden_call"] = _transcript(good + [(f, examples.get(f, {}), True)], claim)
+    if task.get("required_order"):
+        a, b = task["required_order"][0]
+        seq = [t for t in order if t != b]
+        seq.insert(seq.index(a), b)
+        probes["wrong_order"] = _transcript([(t, examples[t], True) for t in seq], claim)
+    if want:
+        wrong = next((x for x in ("Done.", "Task complete.", "OK.") if want.lower() not in x.lower()),
+                     "Unrelated text.")
+        probes["wrong_answer"] = _transcript(good, wrong)
+    other = next((u for u in tasks.values() if u["task_id"] != task["task_id"]
+                  and not set(task["required_tools"]) <= set(u["required_tools"])
+                  and all(t in examples for t in u["required_tools"])), None)
+    if other is not None and order:
+        probes["other_task"] = _transcript([(t, examples[t], True) for t in execution_order(other)], claim)
+    return probes
+
+
+def run_grader(grader, task: dict, steps: list) -> tuple:
+    """(passed, error). A grader that crashes on a degenerate transcript is a finding."""
+    try:
+        verdict = grader(task, steps)
+    except Exception as exc:                    # noqa: BLE001 -- report, don't die
+        return None, f"{type(exc).__name__}: {exc}"
+    if isinstance(verdict, bool):
+        return verdict, None
+    if isinstance(verdict, (int, float)):
+        return float(verdict) >= PASS_SCORE, None
+    return None, f"returned {type(verdict).__name__}, expected a bool or a number"
+
+
+def probe_graders(graders: dict, tasks: dict, tools: dict, rows: list, raw_tasks: dict = None) -> dict:
+    """Run every grader over every probe of every task. A grader holds when it
+    fails every probe, passes every control, and never crashes."""
+    examples = example_args(tools, rows)
+    built, skipped = {}, []
+    for tid, task in tasks.items():
+        probes = build_probes(task, tasks, examples)
+        if probes is None:
+            skipped.append(tid)
+        else:
+            built[tid] = probes
+    out = {"tasks_probed": len(built), "tasks_skipped": skipped, "graders": {}}
+    for name, grader in graders.items():
+        tally = {k: {"n": 0, "passed": 0, "tasks": []} for k in ("control",) + PROBES}
+        errors = []
+        for tid, probes in built.items():
+            view = dict(tasks[tid], **(raw_tasks or {}).get(tid, {}))
+            for kind, steps in probes.items():
+                passed, err = run_grader(grader, view, steps)
+                tally[kind]["n"] += 1
+                if err:
+                    errors.append(f"{tid}/{kind}: {err}")
+                    continue
+                tally[kind]["passed"] += bool(passed)
+                # remember the failures of the control and the passes of a probe
+                if bool(passed) != (kind == "control"):
+                    tally[kind]["tasks"].append(tid)
+        for t in tally.values():
+            t["rate"] = t["passed"] / t["n"] if t["n"] else NAN
+        control = tally.pop("control")
+        out["graders"][name] = {
+            "control": control, "probes": tally, "errors": errors,
+            "holds": (not errors and control["passed"] == control["n"]
+                      and all(t["passed"] == 0 for t in tally.values())),
+        }
+    return out
+
+
+def load_grader(spec: str):
+    """MODULE:FUNCTION -> the callable. The working directory is importable."""
+    module_name, _, func = spec.partition(":")
+    if not module_name or not func:
+        raise ValueError(f"--grader {spec!r}: expected MODULE:FUNCTION")
+    if os.getcwd() not in sys.path:
+        sys.path.insert(0, os.getcwd())
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"--grader {spec!r}: cannot import {module_name} ({exc})") from None
+    grader = getattr(module, func, None)
+    if not callable(grader):
+        raise ValueError(f"--grader {spec!r}: {module_name} has no callable {func!r}")
+    return grader
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -702,6 +874,10 @@ def main(argv=None) -> int:
                    help="exit 1 if any agent's pass^k at the largest k is below P")
     p.add_argument("--fail-forbidden", action="store_true",
                    help="exit 1 if any trajectory calls a forbidden tool")
+    p.add_argument("--grader", action="append", metavar="MODULE:FUNCTION",
+                   help="a grader to probe with null-agent transcripts; repeatable")
+    p.add_argument("--fail-probes", action="store_true",
+                   help="exit 1 if a probed grader passes any probe, fails a control, or crashes")
     p.add_argument("--json", metavar="PATH")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args(argv)
@@ -712,7 +888,11 @@ def main(argv=None) -> int:
             raise ValueError("--k values must be >= 1")
         ks = sorted(set(args.k))
         tools = load_tools(args.tools)
-        tasks = validate_tasks(load_jsonl(args.tasks), tools)
+        task_rows = load_jsonl(args.tasks)
+        tasks = validate_tasks(task_rows, tools)
+        specs = args.grader or []
+        names = [sp.partition(":")[2] for sp in specs]
+        graders = {(n if names.count(n) == 1 else sp): load_grader(sp) for n, sp in zip(names, specs)}
         rows = load_jsonl(args.trajectories)
         graded = validate_trajectories(rows, tasks)
         df = score_all(tasks, tools, rows, args.loop_threshold)
@@ -720,6 +900,8 @@ def main(argv=None) -> int:
         rel_graded = reliability(df, ks, "graded_success") if graded else None
         labels = load_human_labels(args.human_labels) if args.human_labels else None
         humans = human_agreement(df, labels) if labels is not None else None
+        probes = (probe_graders(graders, tasks, tools, rows, {t["task_id"]: t for t in task_rows})
+                  if graders else None)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_BAD_INPUT
@@ -783,6 +965,23 @@ def main(argv=None) -> int:
                     f"{'pass' if d['reference'] else 'fail'}, human "
                     f"{'pass' if d['human'] else 'fail'} ({why})")
 
+    if probes is not None:
+        results["grader_probes"] = probes
+        say("\n" + "=" * 70)
+        say(f"GRADER PROBES   {probes['tasks_probed']} tasks; every probe should FAIL, "
+            "the control should PASS")
+        say("=" * 70)
+        table = pd.DataFrame({name: dict({"control": g["control"]["rate"]},
+                                         **{k: v["rate"] for k, v in g["probes"].items()})
+                              for name, g in probes["graders"].items()}).T
+        table["verdict"] = ["holds" if g["holds"] else "BROKEN" for g in probes["graders"].values()]
+        say(table.round(3).to_string())
+        if probes["tasks_skipped"]:
+            say(f"  skipped (no usable arguments for a required tool): {', '.join(probes['tasks_skipped'])}")
+        for name, g in probes["graders"].items():
+            for e in g["errors"][:3]:
+                say(f"  {name} crashed: {e}")
+
     failures = []
     if args.fail_kappa is not None and graded:
         if not audit["kappa"] >= args.fail_kappa:
@@ -800,8 +999,16 @@ def main(argv=None) -> int:
         for agent, v in faults["forbidden"].items():
             if v:
                 failures.append(f"{agent}: {int(v)} trajectories call a forbidden tool")
+    if args.fail_probes and probes is not None:
+        for name, g in probes["graders"].items():
+            if not g["holds"]:
+                leaks = [k for k, v in g["probes"].items() if v["passed"]]
+                failures.append(f"{name}: passes {', '.join(leaks) or 'no probe'}; control "
+                                f"{g['control']['passed']}/{g['control']['n']}; "
+                                f"{len(g['errors'])} crash(es)")
     gates = [args.fail_kappa is not None and graded, args.fail_false_pass is not None and graded,
-             args.fail_pass_hat_k is not None, args.fail_forbidden]
+             args.fail_pass_hat_k is not None, args.fail_forbidden,
+             args.fail_probes and probes is not None]
     status = EXIT_OK
     if any(gates):
         results["gates"] = {"failures": failures, "passed": not failures}
@@ -811,6 +1018,8 @@ def main(argv=None) -> int:
             say(f"       {f}")
     if (args.fail_kappa is not None or args.fail_false_pass is not None) and not graded:
         say("\nnote: grader gates skipped -- the trajectories carry no graded_success")
+    if args.fail_probes and probes is None:
+        say("\nnote: --fail-probes needs at least one --grader")
 
     if args.json:
         with open(args.json, "w") as f:

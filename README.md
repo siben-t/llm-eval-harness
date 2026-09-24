@@ -15,9 +15,9 @@ plus a label-free repair via Dawid–Skene. See *Auditing an LLM judge* below.
 
 Since 2026-09-24 it also evaluates **agent trajectories** (`agent_eval.py`):
 process metrics for tool-using agents, pass@k and pass^k, a length profile
-that separates a real bottleneck from compounding error, and an audit of the
-grader that scored the runs. See *Evaluating agents, and the grader that
-scored them* below.
+that separates a real bottleneck from compounding error, an audit of the
+grader that scored the runs, and null-agent probes that test a grader before
+any agent runs. See *Evaluating agents, and the grader that scored them* below.
 
 ## Quickstart
 
@@ -272,6 +272,54 @@ Four things the numbers show:
   can adjudicate them; they are not silently resolved in either direction.
   They are the two planted reviewer slips.
 
+### Probing the grader before any agent runs
+
+The audit above needs trajectories a grader has already scored. A cheaper
+check comes first. Hand `agent_eval.py` the grader itself, as a Python
+callable, and it builds transcripts the grader must fail and runs the grader
+on every one, for every task. Each probe is a valid transcript with exactly
+one defect:
+
+| Probe | The one defect |
+|---|---|
+| `empty_answer` | every tool worked; the final answer is empty |
+| `no_tools` | a confident answer, and not one tool call |
+| `missing_tool` | the last required tool is never called |
+| `failed_tool` | the last required tool returns an error and is never retried |
+| `forbidden_call` | a forbidden tool is called along the way |
+| `wrong_order` | a step runs before its prerequisite |
+| `wrong_answer` | every tool worked; the answer lacks the expected content |
+| `other_task` | another task's transcript, under this task's answer |
+
+The control is the same transcript without the defect, and the grader must
+pass it. A grader that rejects everything catches every probe and is still
+broken. Probe arguments are copied from calls that real agents made
+successfully, so each probe's defect is its only defect; a test checks every
+probe against the reference to make sure.
+
+```bash
+python agent_eval.py --tools data/agent_tools.json --tasks data/agent_tasks.jsonl \
+                     --trajectories data/agent_trajectories.jsonl \
+                     --grader make_agent_data:buggy_grader \
+                     --grader make_agent_data:patched_grader \
+                     --grader make_agent_data:fixed_grader --fail-probes
+```
+
+```
+Share of tasks where the grader PASSED (probes should be 0, the control 1)
+                control  empty  no_tools  missing  failed  forbidden  order  wrong_answer  other_task
+buggy_grader       1.0    1.0      1.0      1.0     1.0       1.0    1.0          0.0         1.0   BROKEN
+patched_grader     1.0    0.0      1.0      1.0     1.0       1.0    1.0          0.0         1.0   BROKEN
+fixed_grader       1.0    0.0      0.0      0.0     0.0       0.0    0.0          0.0         0.0   holds
+```
+
+`patched_grader` fixes the empty-answer and literal-token bugs but still reads
+only the final text. The probes show exactly that, in about a second, without
+running an agent. This is the check that catches the TAU-bench flaw: Zhu et
+al. report that a trivial agent returning empty responses scored 38% there,
+because on intentionally impossible tasks an unchanged environment counted
+as success.
+
 Limits, stated plainly:
 
 - The reference needs a task spec: required tools, order, forbidden tools,
@@ -286,12 +334,18 @@ Limits, stated plainly:
   duplicate tasks will trip it. De-duplicate the task set first (`rl-env-qa`
   does that).
 
+- Probes need arguments for every required tool. They come from the tool
+  schema's `example_args` or from a successful call in the trajectories. A
+  task with neither is skipped and listed, never probed with guessed arguments.
+
 Exit codes match the rest of the harness: `0` all gates pass, `1` a gate
-fails, `2` bad input. `tests/test_agent_eval.py` has 43 tests. They check the
+fails, `2` bad input. `tests/test_agent_eval.py` has 50 tests. They check the
 estimators by hand (n = 5, c = 2, k = 2 gives pass@2 = 0.7 and pass^2 = 0.1)
 and every argument rule. They also check that every planted fault and grader
 bug is recovered exactly, with no misses and no false alarms, and that the
-control is left alone.
+control is left alone. The probe tests check that each probe carries exactly
+one defect, and that the probes find exactly the bugs each of the three
+graders still has.
 
 ## What the demo shows
 
@@ -322,7 +376,7 @@ with word-boundary matching is the first item under Extending.)
 | `judge_audit.py` | position bias, self-preference, directional bias, drift, Dawid–Skene — library and CLI |
 | `make_judge_data.py` | synthetic judge verdicts with planted, recoverable biases |
 | `agent_eval.py` | agent trajectory metrics, pass@k / pass^k, length profile, grader audit — library and CLI |
-| `make_agent_data.py` | synthetic agent trajectories with planted faults, graded by a planted-buggy grader |
+| `make_agent_data.py` | synthetic agent trajectories with planted faults, graded by a planted-buggy grader; a patched and a fixed grader for the probes |
 | `tests/test_checks.py` | hand-computable cases for every check |
 | `tests/test_judge_audit.py` | every planted bias is recovered; the control is left alone |
 | `tests/test_agent_eval.py` | every planted agent fault and grader bug is recovered exactly; the control is left alone |
@@ -377,8 +431,6 @@ human_success`.
 - bootstrap confidence intervals on the head-to-head win rate
 - regression gating: fail CI when a dimension mean drops vs baseline
 - per-category score thresholds for release decisions
-- agent eval: a grader hook that runs null agents (empty, do-nothing, replayed)
-  through a live grader before its scores are trusted
 - agent eval: semantic argument checks from the task spec (the right date,
   not just a well-formed one)
 

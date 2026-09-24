@@ -31,6 +31,10 @@ The grader under audit (buggy_grader) has three planted bugs
   3. it demands the literal token "Confirmation:", so correct answers that
      say "your confirmation number is ..." are rejected
 
+Two repaired versions sit beside it for the null-agent probes: patched_grader
+fixes bugs 1 and 3 but still reads only the final text, and fixed_grader also
+reads the tool calls. The probes should find exactly the bugs each one still has.
+
 A simulated human review of 60 sampled transcripts labels each one by what
 actually happened, with two deliberate reviewer slips, so the audit has
 disagreements to surface for adjudication.
@@ -269,6 +273,30 @@ def buggy_grader(task, steps):
     if word == "confirmation":
         return "Confirmation:" in text                               # bug 3 (and 2: tools never read)
     return word in text.lower()                                      # bug 2
+
+
+def patched_grader(task, steps):
+    """Bugs 1 and 3 fixed: an empty answer fails, and the expected content is
+    matched in any case. Still reads only the final text, so bug 2 remains."""
+    finals = [x for x in steps if x["type"] == "final"]
+    text = finals[-1]["content"] if finals else ""
+    return bool(text.strip()) and task["expected_final_contains"].lower() in text.lower()
+
+
+def fixed_grader(task, steps):
+    """All three bugs fixed: the answer AND the tool calls are checked."""
+    if not patched_grader(task, steps):
+        return False
+    succeeded = set()
+    for x in steps:
+        if x["type"] == "tool_result" and x.get("ok"):
+            succeeded.add(x["tool"])
+        elif x["type"] == "tool_call":
+            if x["tool"] in task["forbidden_tools"]:
+                return False
+            if any(x["tool"] == b and a not in succeeded for a, b in task["required_order"]):
+                return False
+    return all(t in succeeded for t in task["required_tools"])
 
 
 def generate(seed=SEED):
